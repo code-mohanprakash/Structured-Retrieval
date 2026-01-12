@@ -299,15 +299,15 @@ with tab2:
                     result = engine.query(query)
                 
                 # Format response
-                response_text = result.get('answer', 'No answer generated')
+                response_text = result.answer or 'No answer generated'
                 
                 # Extract data if SQL was executed
                 result_data = None
-                if 'sql' in result and result['sql']:
+                if result.sql_executed:
                     try:
                         db = DuckDBManager(st.session_state.db_path)
                         conn = db.conn
-                        df = conn.execute(result['sql']).fetchdf()
+                        df = conn.execute(result.sql_executed).fetchdf()
                         if not df.empty:
                             result_data = df
                     except Exception as e:
@@ -328,9 +328,9 @@ with tab2:
                             st.dataframe(result_data, use_container_width=True)
                         
                         # Show SQL in expander
-                        if 'sql' in result and result['sql']:
+                        if result.sql_executed:
                             with st.expander("🔍 View SQL Query"):
-                                st.code(result['sql'], language='sql')
+                                st.code(result.sql_executed, language='sql')
             
             except Exception as e:
                 error_msg = f"❌ Error: {str(e)}"
