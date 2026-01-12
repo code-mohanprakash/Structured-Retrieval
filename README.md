@@ -1,319 +1,203 @@
-# 🚀 StructRAG MCP - Structured Retrieval-Augmented Generation
+# StructRAG MCP
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+Transform PDFs into queryable SQL databases using AI. Extract structured data from unstructured documents automatically.
 
-**Convert PDFs to queryable SQL databases using AI-powered schema discovery.**
+## What It Does
 
-Traditional RAG returns text chunks. StructRAG extracts structured data into SQL tables, enabling analytics, aggregations, and complex queries across thousands of documents.
+1. **Upload** a PDF (annual report, contract, invoice)
+2. **AI discovers** hidden data structures (tables, entities)
+3. **Extract** structured data into SQL tables
+4. **Query** with natural language: "What was Q3 revenue?"
 
----
+Traditional RAG finds keywords. **StructRAG finds patterns and builds databases.**
 
-## 🎯 The Problem with Traditional RAG
-
-```
-User: "What's the total contract value across all documents?"
-Traditional RAG: Returns text chunks... ❌ Can't aggregate
-StructRAG: SELECT SUM(value) FROM Contracts → $15.2M ✅
-```
-
----
-
-## ✨ Features
-
-- 🤖 **Automatic Schema Discovery** - AI analyzes your PDFs and discovers entity structures
-- 📊 **SQL Analytics** - Run aggregations, JOINs, and complex queries across documents  
-- ⚡ **Fast Queries** - 500ms query latency with Groq LLM
-- 🔍 **Provenance Tracking** - Every data point links back to source document + page
-- 🗄️ **DuckDB Backend** - Embedded analytical database, scales to 100K+ documents
-- 🔌 **MCP Protocol** - Works with Claude Desktop and other MCP clients
-
----
-
-## 📦 Installation
+## Quick Start
 
 ```bash
-# Clone repository
+# Install
+git clone https://github.com/code-mohanprakash/Structured-Retrieval.git
+cd Structured-Retrieval
+pip install -e .
+
+# Add your Groq API key (free at console.groq.com)
+echo "GROQ_API_KEY=gsk_YOUR_KEY_HERE" > .env
+
+# Test it (2 minutes)
+python quick_test.py
+```
+
+**Expected output:**
+```
+✅ Ingested: 42 chunks, 21,416 tokens
+✅ Schema discovered: 3 entities
+✅ All systems working!
+```
+
+## Real Example
+
+**Input:** Occidental Petroleum Annual Report (15MB PDF)
+
+**AI Discovered:**
+- `FinancialMetrics` table (revenue, expenses, profit)
+- `BusinessSegment` table (divisions, locations)
+- `CompanyInfo` table (executives, acquisitions)
+
+**Queries you can run:**
+- "Show total revenue by quarter"
+- "Which business segment has highest profit?"
+- "List all acquisitions mentioned"
+
+## How It Works
+
+```
+PDF → Smart Chunking → AI Analysis → SQL Tables → Query with Natural Language
+```
+
+1. **Chunk** PDF into semantic pieces (512 tokens each)
+2. **Discover** patterns using Groq AI (llama-3.3-70b, ~1 second)
+3. **Extract** structured data into DuckDB tables
+4. **Query** using natural language → auto-converts to SQL
+
+## Why Use This?
+
+| Use Case | Example |
+|----------|---------|
+| **Financial Analysis** | Extract metrics from 100+ quarterly reports |
+| **Legal Contracts** | Find all clauses mentioning payment terms |
+| **Research Papers** | Compare methodologies across 50 studies |
+| **Invoice Processing** | Auto-extract vendors, amounts, dates |
+
+**The difference:** Aggregate and compare across documents. Traditional RAG can't do math or joins.
+
+## Installation
+
+**Requirements:**
+- Python 3.11+
+- Groq API key (free tier: 30 requests/min)
+
+**Step-by-step:**
+```bash
+# 1. Clone
 git clone https://github.com/code-mohanprakash/Structured-Retrieval.git
 cd Structured-Retrieval
 
-# Install dependencies
+# 2. Install
 pip install -e .
 
-# Configure API keys
+# 3. Configure API
 cp .env.example .env
-# Edit .env and add your Groq API key
+# Edit .env and add your Groq key
+
+# 4. Verify
+python quick_test.py
 ```
 
-**Get a free Groq API key:** https://console.groq.com/keys
+## Usage
 
----
-
-## ⚡ Quick Start
-
-### Run Quick Test
-
-```bash
-python3 quick_test.py
-```
-
-Expected: ✅ All tests passed + entities discovered
-
-### Python API Example
-
+### Basic Usage
 ```python
-from structrag_mcp.storage import DuckDBManager, ProvenanceTracker
-from structrag_mcp.ingestion import PDFParser, SemanticChunker
-from structrag_mcp.structure.schema_inductor import SchemaInductor
+from structrag_mcp.ingestion import IngestionManager
+from structrag_mcp.structure import SchemaInductor, EntityExtractor
+from structrag_mcp.query import QueryEngine
 
-# Setup
-db = DuckDBManager("./data/my_database.db")
-provenance = ProvenanceTracker(db)
+# 1. Ingest PDF
+manager = IngestionManager("my_db.db")
+manager.ingest_pdf("annual_report.pdf")
 
-# Ingest PDFs
-parser = PDFParser()
-parsed = parser.parse("annual_report.pdf")
+# 2. Discover structure
+inductor = SchemaInductor("my_db.db", llm_provider="groq")
+schemas = inductor.discover_schemas()
 
-chunker = SemanticChunker()
-chunks = chunker.chunk(parsed["text"], {})
+# 3. Extract entities
+extractor = EntityExtractor("my_db.db", llm_provider="groq")
+extractor.extract_all_entities(schemas)
 
-# Store chunks
-doc_id = provenance.generate_doc_id("report", "annual_report.pdf")
-db.insert_document(doc_id, "report.pdf", "annual_report.pdf", ".pdf", {})
-for i, chunk in enumerate(chunks):
-    chunk_id = provenance.generate_chunk_id(doc_id, i)
-    db.insert_chunks([{
-        "chunk_id": chunk_id, "doc_id": doc_id,
-        "chunk_index": i, "text": chunk["text"],
-        "token_count": chunk["token_count"], "metadata": {}
-    }])
-
-# Discover schema automatically
-inductor = SchemaInductor(db)
-result = inductor.induce_schema(
-    entity_hints=["FinancialMetrics", "BusinessSegment", "CompanyInfo"]
-)
-
-print(f"Discovered {len(result.entities)} entity types!")
+# 4. Query
+engine = QueryEngine("my_db.db", llm_provider="groq")
+result = engine.query("What was total revenue?")
+print(result)
 ```
 
-### MCP Server (Use with Claude Desktop)
+### Command Line
+```bash
+# Ingest documents
+python examples/ingest_pdf.py report.pdf
 
-**1. Configure Claude Desktop:**
+# Discover schemas
+python examples/discover_schema.py
 
-Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
+# Query
+python examples/query_example.py "Show revenue by quarter"
+```
 
+### With Claude Desktop (MCP)
+Add to `claude_desktop_config.json`:
 ```json
 {
   "mcpServers": {
     "structrag": {
       "command": "python",
-      "args": ["-m", "structrag_mcp.server"],
-      "env": {
-        "GROQ_API_KEY": "your_groq_api_key_here"
-      }
+      "args": ["-m", "structrag_mcp"],
+      "env": {"GROQ_API_KEY": "gsk_YOUR_KEY_HERE"}
     }
   }
 }
 ```
 
-**2. Use in Claude Desktop:**
-- Tools appear automatically
-- "Ingest this folder of PDFs"
-- "Build schema for contracts"
-- "Query: What's the total revenue?"
+Then ask Claude: "Analyze the annual report in my database"
+
+## Performance
+
+**Tested with 15MB PDF:**
+- Processing: 42 chunks in ~30 seconds
+- Schema discovery: 3 entities in 1.1 seconds
+- Queries: 500ms average response
+
+**Costs (with Groq):**
+- Schema discovery: ~$0.02 per document
+- Queries: ~$0.001 per query
+- Free tier: 30 requests/min (enough for testing)
+
+## Documentation
+
+📖 **[Complete Guide](docs/HOW_IT_WORKS.md)** - Full technical walkthrough  
+🚀 **[Groq Setup](docs/GROQ_SETUP.md)** - API configuration  
+✅ **[Test Results](docs/TEST_RESULTS.md)** - Real PDF examples  
+📦 **[Distribution](docs/DISTRIBUTION_GUIDE.md)** - PyPI publishing
+
+## Limitations
+
+- Requires LLM for schema discovery (costs apply)
+- Best with structured documents (reports, contracts)
+- Not tested with 1000+ document collections yet
+- Quality depends on LLM capabilities
+
+## Roadmap
+
+- [ ] Support for Word docs, Excel, CSV
+- [ ] Pre-built schemas (financial, legal, research)
+- [ ] Multi-document relationship detection
+- [ ] Web UI for document management
+
+## Contributing
+
+Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md)
+
+**Ideas:**
+- Add new document parsers
+- Optimize chunking strategies
+- Create domain-specific schema templates
+- Improve query translation
+
+## License
+
+MIT License - Free for commercial use
+
+## Support
+
+- 🐛 **Bugs:** [GitHub Issues](https://github.com/code-mohanprakash/Structured-Retrieval/issues)
+- 💬 **Questions:** [GitHub Discussions](https://github.com/code-mohanprakash/Structured-Retrieval/discussions)
 
 ---
 
-## 🧪 Testing
-
-### Quick Test
-```bash
-python3 quick_test.py
-```
-
-### Full Test Suite
-```bash
-pytest tests/ -v
-```
-
-Expected: 10/10 tests passing
-
----
-
-## 📚 Documentation
-
-| Document | Description |
-|----------|-------------|
-| [READY_TO_USE.md](READY_TO_USE.md) | ⭐ Start here - Quick overview |
-| [HOW_IT_WORKS.md](HOW_IT_WORKS.md) | Complete technical guide |
-| [TEST_RESULTS.md](TEST_RESULTS.md) | Example test results |
-| [DISTRIBUTION_GUIDE.md](DISTRIBUTION_GUIDE.md) | Publishing guide |
-
----
-
-## 🎬 How It Works
-
-### 5-Step Pipeline
-
-```
-1. INGESTION
-   PDFs → Extract text → Semantic chunking (512 tokens)
-   
-2. SCHEMA DISCOVERY  
-   AI analyzes patterns → Discovers entities automatically
-   
-3. ENTITY EXTRACTION
-   AI extracts structured data → Populates SQL tables
-   
-4. QUERY TRANSLATION
-   Natural language → SQL query generation
-   
-5. ANSWER GENERATION
-   SQL results → Human-readable answer with provenance
-```
-
----
-
-## 💡 Use Cases
-
-### Financial Analysis
-```python
-# Ingest 100 annual reports
-# Query: "Which company has the highest revenue?"
-# Query: "Show average profit margin by industry"  
-# Query: "Compare year-over-year growth rates"
-```
-
-### Contract Analysis  
-```python
-# Ingest 500 vendor contracts
-# Query: "What's the total contract value?"
-# Query: "Which contracts expire in Q1 2024?"
-# Query: "Show all contracts with auto-renewal clauses"
-```
-
-### Invoice Processing
-```python
-# Ingest 1000 invoices from multiple vendors
-# Query: "Total amount invoiced this quarter?"
-# Query: "Which vendor has the most unpaid invoices?"
-# Query: "What's the average payment delay by vendor?"
-```
-
----
-
-## 🏗️ Architecture
-
-```
-src/structrag_mcp/
-├── ingestion/          # PDF parsing, semantic chunking
-├── storage/            # DuckDB operations, provenance tracking
-├── structure/          # Schema discovery, entity extraction
-├── query/              # NL → SQL translation, query engine
-├── llm/                # Groq/OpenAI/Anthropic LLM providers
-└── server.py           # MCP server implementation
-```
-
----
-
-## ⚙️ Configuration
-
-### LLM Providers
-
-**Groq (Default - Fast & Free):**
-```bash
-GROQ_API_KEY=your_key_here
-GROQ_MODEL=llama-3.3-70b-versatile
-LLM_PROVIDER=groq
-```
-
-**OpenAI (Alternative):**
-```bash
-OPENAI_API_KEY=your_key_here  
-OPENAI_MODEL=gpt-4o
-LLM_PROVIDER=openai
-```
-
-**Anthropic (Alternative):**
-```bash
-ANTHROPIC_API_KEY=your_key_here
-ANTHROPIC_MODEL=claude-3-5-sonnet-20241022
-LLM_PROVIDER=anthropic
-```
-
----
-
-## 📊 Performance Benchmarks
-
-| Operation | Time | Notes |
-|-----------|------|-------|
-| PDF Ingestion | ~1 sec/MB | Includes parsing + chunking |
-| Schema Discovery | 1-2 seconds | With Groq LLM |
-| Entity Extraction | 2-3 sec/chunk | Parallel processing supported |
-| Query Translation | 500-800 ms | Groq is very fast |
-| SQL Execution | <100 ms | DuckDB optimized for analytics |
-
-**Scales to:** 100K+ documents in single DuckDB database
-
----
-
-## 🚀 What Makes StructRAG Powerful
-
-### vs Traditional RAG
-
-| Traditional RAG | StructRAG |
-|-----------------|-----------|
-| Returns text chunks | Returns structured data |
-| Can't aggregate | SQL: SUM, COUNT, AVG, GROUP BY |
-| Can't calculate | Math across documents |
-| Slow for analytics | Fast with SQL indexes |
-| No relationships | Foreign keys & JOINs |
-
-### Key Advantages
-
-1. **Automatic Schema** - No manual field definition needed
-2. **SQL Power** - Full analytical SQL on unstructured PDFs
-3. **Fast** - 500ms queries after upfront extraction
-4. **Provenance** - Every data point traces to source page
-5. **Scalable** - DuckDB handles millions of rows
-
----
-
-## 🤝 Contributing
-
-Contributions welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
----
-
-## 📄 License
-
-MIT License - See [LICENSE](LICENSE) for details
-
----
-
-## 🙏 Acknowledgments
-
-- **Groq** - Fast LLM inference (1-2 second responses)
-- **DuckDB** - Embedded analytical database
-- **FastMCP** - MCP server framework
-- **PyPDF** - PDF text extraction
-
----
-
-## 🔗 Links
-
-- **Repository**: https://github.com/code-mohanprakash/Structured-Retrieval
-- **Groq Console**: https://console.groq.com (Get free API key)
-- **MCP Protocol**: https://modelcontextprotocol.io
-
----
-
-## 💬 Support
-
-- **Issues**: https://github.com/code-mohanprakash/Structured-Retrieval/issues
-- **Documentation**: See repository docs folder
-
----
-
-**Built with ❤️ for better document understanding**
+**Built with:** Groq AI • DuckDB • Model Context Protocol
