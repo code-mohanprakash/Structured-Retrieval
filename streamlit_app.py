@@ -9,10 +9,12 @@ import tempfile
 import os
 from pathlib import Path
 import pandas as pd
-from structrag_mcp.ingestion import IngestionManager
-from structrag_mcp.structure import SchemaInductor, EntityExtractor
-from structrag_mcp.query import QueryEngine
-from structrag_mcp.storage import StorageManager
+import json
+from structrag_mcp.storage import DuckDBManager, ProvenanceTracker
+from structrag_mcp.ingestion import PDFParser, SemanticChunker, MetadataExtractor
+from structrag_mcp.structure.schema_inductor import SchemaInductor
+from structrag_mcp.structure.entity_extractor import EntityExtractor
+from structrag_mcp.query.engine import QueryEngine
 import duckdb
 
 # Page config
@@ -59,8 +61,8 @@ with st.sidebar:
         
         # Show stats
         try:
-            storage = StorageManager(st.session_state.db_path)
-            conn = storage.conn
+            db = DuckDBManager(st.session_state.db_path)
+            conn = db.conn
             
             chunk_count = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
             st.metric("Chunks", chunk_count)
@@ -125,35 +127,78 @@ with tab1:
                         pdf_path = tmp_file.name
                     
                     # Create database
-                    db_path = f"streamlit_db_{uploaded_file.name.replace('.pdf', '')}.db"
+                    db_path = f"streamlit_db_{uploaded_file.name.replace('.pdf', '').replace(' ', '_')}.db"
                     st.session_state.db_path = db_path
                     
-                    # Step 2: Ingest PDF
-                    status_text.text("📊 Ingesting PDF (chunking & embeddings)...")
+                    # Initialize database
+                    db = DuckDBManager(db_path)
+                    provenance = ProvenanceTracker(db)
+                    
+                    # Step 2: Parse PDF
+                    status_text.text("📖 Parsing PDF...")
                     progress_bar.progress(20)
                     
-                    manager = IngestionManager(db_path)
-                    result = manager.ingest_pdf(pdf_path)
+                    parser = PDFParser()
+                    parsed = parser.parse(pdf_path)
+                    
+                    # Extract metadata
+                    metadata_extractor = MetadataExtractor()
+                    file_metadata = metadata_extractor.extract_file_metadata(pdf_path)
+                    metadata = {**parsed.get("metadata", {}), **file_metadata}
+                    
+                    # Insert document
+                    doc_id = provenance.generate_doc_id(uploaded_file.name, pdf_path)
+                    db.insert_document(doc_id, uploaded_file.name, pdf_path, ".pdf", metadata)
+                    
+                    # Step 3: Chunk document
+                    status_text.text("✂️ Chunking document...")
+                    progress_bar.progress(30)
+                    
+                    chunker = SemanticChunker()
+                    chunks = chunker.chunk(parsed["text"], metadata)
+                    
+                    # Insert chunks
+                    chunk_data = []
+                    for i, chunk in enumerate(chunks):
+                        chunk_id = provenance.generate_chunk_id(doc_id, i)
+                        chunk_data.append({
+                            "chunk_id": chunk_id,
+                            "doc_id": doc_id,
+                            "chunk_index": i,
+                            "text": chunk["text"],
+                            "token_count": chunk["token_count"],
+                            "metadata": chunk.get("metadata", {})
+                        })
+                    
+                    db.insert_chunks(chunk_data)
+                    total_tokens = sum(c['token_count'] for c in chunks)
                     
                     progress_bar.progress(40)
-                    status_text.text(f"✅ Ingested {result['chunks_created']} chunks, {result['total_tokens']:,} tokens")
+                    status_text.text(f"✅ Ingested {len(chunks)} chunks, {total_tokens:,} tokens")
                     
-                    # Step 3: Discover schemas
+                    # Step 4: Discover schemas
                     status_text.text("🔍 Discovering schemas (AI analyzing patterns)...")
                     progress_bar.progress(50)
                     
-                    inductor = SchemaInductor(db_path, llm_provider="groq")
-                    schemas = inductor.discover_schemas()
+                    inductor = SchemaInductor(db)
+                    schema_result = inductor.induce_schema(
+                        entity_hints=["FinancialMetrics", "BusinessSegment", "CompanyInfo", "KeyPerson", "Event"]
+                    )
+                    
+                    schemas = schema_result.entities
                     
                     progress_bar.progress(70)
                     status_text.text(f"✅ Discovered {len(schemas)} schemas")
                     
-                    # Step 4: Extract entities
+                    # Step 5: Extract entities
                     status_text.text("⚡ Extracting entities (populating tables)...")
                     progress_bar.progress(75)
                     
-                    extractor = EntityExtractor(db_path, llm_provider="groq")
-                    extraction_results = extractor.extract_all_entities(schemas)
+                    extractor = EntityExtractor(db)
+                    total_entities = 0
+                    for schema in schemas:
+                        extraction_result = extractor.extract_entities(schema)
+                        total_entities += extraction_result.get('entity_count', 0)
                     
                     progress_bar.progress(100)
                     status_text.text("✅ Processing complete!")
@@ -166,11 +211,10 @@ with tab1:
                     
                     col1, col2, col3 = st.columns(3)
                     with col1:
-                        st.metric("Chunks Created", result['chunks_created'])
+                        st.metric("Chunks Created", len(chunks))
                     with col2:
                         st.metric("Schemas Discovered", len(schemas))
                     with col3:
-                        total_entities = sum(r.get('entities_extracted', 0) for r in extraction_results)
                         st.metric("Entities Extracted", total_entities)
                     
                     # Show discovered schemas
@@ -180,7 +224,7 @@ with tab1:
                             st.markdown(f"**Description:** {schema.description}")
                             st.markdown("**Attributes:**")
                             for attr in schema.attributes:
-                                st.markdown(f"- `{attr.name}` ({attr.data_type}): {attr.description}")
+                                st.markdown(f"- `{attr.name}` ({attr.type}): {attr.description}")
                     
                     # Clean up temp file
                     os.unlink(pdf_path)
@@ -245,7 +289,8 @@ with tab2:
             # Process query
             try:
                 with st.spinner("🤔 Thinking..."):
-                    engine = QueryEngine(st.session_state.db_path, llm_provider="groq")
+                    db = DuckDBManager(st.session_state.db_path)
+                    engine = QueryEngine(db)
                     result = engine.query(query)
                 
                 # Format response
@@ -255,8 +300,8 @@ with tab2:
                 result_data = None
                 if 'sql' in result and result['sql']:
                     try:
-                        storage = StorageManager(st.session_state.db_path)
-                        conn = storage.conn
+                        db = DuckDBManager(st.session_state.db_path)
+                        conn = db.conn
                         df = conn.execute(result['sql']).fetchdf()
                         if not df.empty:
                             result_data = df
@@ -321,8 +366,8 @@ with tab3:
         st.warning("⚠️ Please upload and process a PDF first")
     else:
         try:
-            storage = StorageManager(st.session_state.db_path)
-            conn = storage.conn
+            db = DuckDBManager(st.session_state.db_path)
+            conn = db.conn
             
             # Get all tables
             tables = conn.execute("""
