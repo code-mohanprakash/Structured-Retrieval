@@ -11,6 +11,20 @@ Transform PDFs into queryable SQL databases using AI. Extract structured data fr
 
 Traditional RAG finds keywords. **StructRAG finds patterns and builds databases.**
 
+## 🌐 Try the Web Interface
+
+**NEW:** Interactive web app - upload PDFs and query instantly!
+
+```bash
+# Install and run
+pip install streamlit
+./run_streamlit.sh
+```
+
+Opens at **http://localhost:8501** with drag-drop upload, chat interface, and table viewer.
+
+[📖 Web App Guide](docs/STREAMLIT_APP.md)
+
 ## Quick Start
 
 ```bash
