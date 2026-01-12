@@ -454,7 +454,7 @@ def complete_with_fallback(
     json_mode: bool = False
 ) -> LLMResponse:
     """
-    Complete with Groq primary, OpenAI fallback
+    Complete using Google Gemini (single provider)
     
     Args:
         system_prompt: System instruction
@@ -462,29 +462,19 @@ def complete_with_fallback(
         json_mode: Force JSON output
     
     Returns:
-        LLMResponse from successful provider
+        LLMResponse from Google provider
     """
-    # Get provider preference from env (default: groq)
-    preferred_provider = os.getenv("LLM_PROVIDER", "groq").lower()
+    # Get provider preference from env (default: google)
+    preferred_provider = os.getenv("LLM_PROVIDER", "google").lower()
     
-    # Build list of available providers based on API keys
-    available_providers = []
-    if os.getenv("GROQ_API_KEY"):
-        available_providers.append(("groq", get_groq_provider))
-    if os.getenv("GOOGLE_API_KEY"):
-        available_providers.append(("google", get_google_provider))
-    if os.getenv("OPENAI_API_KEY"):
-        available_providers.append(("openai", get_openai_provider))
-    if os.getenv("ANTHROPIC_API_KEY"):
-        available_providers.append(("anthropic", get_anthropic_provider))
-    
-    if not available_providers:
-        error_msg = "No LLM API keys configured. Please set GROQ_API_KEY, GOOGLE_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY"
+    # Only use Google provider
+    if not os.getenv("GOOGLE_API_KEY"):
+        error_msg = "GOOGLE_API_KEY not configured. Please set it in .env file"
         logger.error(error_msg)
         return LLMResponse(
             content="",
             model="unknown",
-            provider=LLMProvider.GROQ,
+            provider=LLMProvider.GOOGLE,
             prompt_tokens=0,
             completion_tokens=0,
             total_tokens=0,
@@ -492,36 +482,36 @@ def complete_with_fallback(
             error=error_msg
         )
     
-    # Sort so preferred provider is first
-    available_providers.sort(key=lambda x: 0 if x[0] == preferred_provider else 1)
-    
-    # Try each available provider
-    last_error = None
-    for provider_name, provider_getter in available_providers:
-        try:
-            provider = provider_getter()
-            # Anthropic doesn't support json_mode
-            use_json = json_mode if provider_name != "anthropic" else False
-            response = provider.complete(system_prompt, user_prompt, use_json)
-            if not response.error:
-                logger.info(f"Successfully used {provider_name} provider")
-                return response
-            logger.warning(f"{provider_name.title()} failed: {response.error}, trying next provider")
-            last_error = response.error
-        except Exception as e:
-            logger.warning(f"{provider_name.title()} provider failed: {str(e)}, trying next provider")
-            last_error = str(e)
-    
-    # All providers failed
-    error_msg = f"All available providers failed. Last error: {last_error}"
-    logger.error(error_msg)
-    return LLMResponse(
-        content="",
-        model="unknown",
-        provider=LLMProvider.GROQ,
-        prompt_tokens=0,
-        completion_tokens=0,
-        total_tokens=0,
-        latency_ms=0,
-        error=error_msg
-    )
+    # Use Google provider
+    try:
+        provider = get_google_provider()
+        response = provider.complete(system_prompt, user_prompt, json_mode)
+        if not response.error:
+            logger.info(f"Successfully used Google Gemini")
+            return response
+        
+        error_msg = f"Google Gemini failed: {response.error}"
+        logger.error(error_msg)
+        return LLMResponse(
+            content="",
+            model="unknown",
+            provider=LLMProvider.GOOGLE,
+            prompt_tokens=0,
+            completion_tokens=0,
+            total_tokens=0,
+            latency_ms=0,
+            error=error_msg
+        )
+    except Exception as e:
+        error_msg = f"Google provider failed: {str(e)}"
+        logger.error(error_msg)
+        return LLMResponse(
+            content="",
+            model="unknown",
+            provider=LLMProvider.GOOGLE,
+            prompt_tokens=0,
+            completion_tokens=0,
+            total_tokens=0,
+            latency_ms=0,
+            error=error_msg
+        )
