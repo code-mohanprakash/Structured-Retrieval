@@ -223,10 +223,12 @@ with tab1:
                     st.subheader("📋 Discovered Schemas")
                     for schema in schemas:
                         with st.expander(f"🗂️ {schema.name}"):
-                            st.markdown(f"**Description:** {schema.description}")
+                            st.markdown(f"**Entity:** {schema.name}")
+                            st.markdown(f"**Table:** {schema.table_name or schema.name.lower()}")
                             st.markdown("**Attributes:**")
                             for attr in schema.attributes:
-                                st.markdown(f"- `{attr.name}` ({attr.type}): {attr.description}")
+                                desc = f" - {attr.description}" if attr.description else ""
+                                st.markdown(f"- `{attr.name}` ({attr.type}): confidence={attr.confidence}{desc}")
                     
                     # Clean up temp file
                     os.unlink(pdf_path)
