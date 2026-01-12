@@ -388,33 +388,18 @@ def complete_with_fallback(
     # Get provider preference from env (default: groq)
     preferred_provider = os.getenv("LLM_PROVIDER", "groq").lower()
     
-    # Try preferred provider first
-    if preferred_provider == "groq":
-        try:
-            provider = get_groq_provider()
-            response = provider.complete(system_prompt, user_prompt, json_mode)
-            if not response.error:
-                return response
-            logger.warning(f"Groq failed: {response.error}, trying OpenAI fallback")
-        except Exception as e:
-            logger.warning(f"Groq provider failed: {str(e)}, trying OpenAI fallback")
+    # Build list of available providers based on API keys
+    available_providers = []
+    if os.getenv("GROQ_API_KEY"):
+        available_providers.append(("groq", get_groq_provider))
+    if os.getenv("OPENAI_API_KEY"):
+        available_providers.append(("openai", get_openai_provider))
+    if os.getenv("ANTHROPIC_API_KEY"):
+        available_providers.append(("anthropic", get_anthropic_provider))
     
-    # Try OpenAI as fallback
-    try:
-        provider = get_openai_provider()
-        response = provider.complete(system_prompt, user_prompt, json_mode)
-        if not response.error:
-            return response
-        logger.warning(f"OpenAI failed: {response.error}, trying Anthropic fallback")
-    except Exception as e:
-        logger.warning(f"OpenAI provider failed: {str(e)}, trying Anthropic fallback")
-    
-    # Fallback to Anthropic
-    try:
-        provider = get_anthropic_provider()
-        return provider.complete(system_prompt, user_prompt, json_mode=False)  # Anthropic doesn't support json_mode
-    except Exception as e:
-        logger.error(f"All LLM providers failed: {str(e)}")
+    if not available_providers:
+        error_msg = "No LLM API keys configured. Please set GROQ_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY"
+        logger.error(error_msg)
         return LLMResponse(
             content="",
             model="unknown",
@@ -423,5 +408,39 @@ def complete_with_fallback(
             completion_tokens=0,
             total_tokens=0,
             latency_ms=0,
-            error=f"All providers failed: {str(e)}"
+            error=error_msg
         )
+    
+    # Sort so preferred provider is first
+    available_providers.sort(key=lambda x: 0 if x[0] == preferred_provider else 1)
+    
+    # Try each available provider
+    last_error = None
+    for provider_name, provider_getter in available_providers:
+        try:
+            provider = provider_getter()
+            # Anthropic doesn't support json_mode
+            use_json = json_mode if provider_name != "anthropic" else False
+            response = provider.complete(system_prompt, user_prompt, use_json)
+            if not response.error:
+                logger.info(f"Successfully used {provider_name} provider")
+                return response
+            logger.warning(f"{provider_name.title()} failed: {response.error}, trying next provider")
+            last_error = response.error
+        except Exception as e:
+            logger.warning(f"{provider_name.title()} provider failed: {str(e)}, trying next provider")
+            last_error = str(e)
+    
+    # All providers failed
+    error_msg = f"All available providers failed. Last error: {last_error}"
+    logger.error(error_msg)
+    return LLMResponse(
+        content="",
+        model="unknown",
+        provider=LLMProvider.GROQ,
+        prompt_tokens=0,
+        completion_tokens=0,
+        total_tokens=0,
+        latency_ms=0,
+        error=error_msg
+    )
