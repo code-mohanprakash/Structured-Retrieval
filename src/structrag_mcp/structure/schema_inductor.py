@@ -186,32 +186,54 @@ class SchemaInductor:
             table_name = entity.name.lower()
             
             # Check if schema already exists, if so update it
-            check_query = "SELECT COUNT(*) FROM schema_registry WHERE table_name = ?"
-            existing = self.db.execute_query(check_query, params=[table_name])
-            
-            if existing and len(existing) > 0 and existing[0][0] > 0:
-                # Update existing schema
-                update_query = """
-                UPDATE schema_registry 
-                SET entity_type = ?, schema_json = ?, confidence = ?
-                WHERE table_name = ?
-                """
-                self.db.execute_query(
-                    update_query,
-                    params=[entity.name, schema_json, result.metadata.get("confidence", 0.9), table_name]
-                )
-                logger.info(f"Updated schema for {table_name}")
-            else:
-                # Insert new schema
-                insert_query = """
-                INSERT INTO schema_registry (table_name, entity_type, schema_json, created_at, confidence)
-                VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?)
-                """
-                self.db.execute_query(
-                    insert_query,
-                    params=[table_name, entity.name, schema_json, result.metadata.get("confidence", 0.9)]
-                )
-                logger.info(f"Inserted new schema for {table_name}")
+            check_query = "SELECT COUNT(*) as cnt FROM schema_registry WHERE table_name = ?"
+            try:
+                existing = self.db.execute_query(check_query, params=[table_name])
+                # Handle different result formats (dict vs tuple)
+                count = 0
+                if existing and len(existing) > 0:
+                    if isinstance(existing[0], dict):
+                        count = existing[0].get("cnt", 0)
+                    else:
+                        count = existing[0][0] if len(existing[0]) > 0 else 0
+                
+                if count > 0:
+                    # Update existing schema
+                    update_query = """
+                    UPDATE schema_registry 
+                    SET entity_type = ?, schema_json = ?, confidence = ?
+                    WHERE table_name = ?
+                    """
+                    self.db.execute_query(
+                        update_query,
+                        params=[entity.name, schema_json, result.metadata.get("confidence", 0.9), table_name]
+                    )
+                    logger.info(f"Updated schema for {table_name}")
+                else:
+                    # Insert new schema
+                    insert_query = """
+                    INSERT INTO schema_registry (table_name, entity_type, schema_json, created_at, confidence)
+                    VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?)
+                    """
+                    self.db.execute_query(
+                        insert_query,
+                        params=[table_name, entity.name, schema_json, result.metadata.get("confidence", 0.9)]
+                    )
+                    logger.info(f"Inserted new schema for {table_name}")
+            except Exception as e:
+                logger.warning(f"Error checking/storing schema for {table_name}: {e}. Attempting insert...")
+                # Fallback: try insert, ignore if duplicate
+                try:
+                    insert_query = """
+                    INSERT INTO schema_registry (table_name, entity_type, schema_json, created_at, confidence)
+                    VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?)
+                    """
+                    self.db.execute_query(
+                        insert_query,
+                        params=[table_name, entity.name, schema_json, result.metadata.get("confidence", 0.9)]
+                    )
+                except Exception as insert_err:
+                    logger.info(f"Schema {table_name} already exists: {insert_err}")
         
         logger.info(f"Stored {len(result.entities)} schemas in registry")
     
