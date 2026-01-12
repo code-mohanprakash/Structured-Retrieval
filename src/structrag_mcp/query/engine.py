@@ -97,7 +97,23 @@ class QueryEngine:
             raise ValueError(f"Unsafe SQL detected: {sql_result.sql}")
         
         # Step 4: Execute SQL
-        results = self.db.execute_query(sql_result.sql)
+        try:
+            results = self.db.execute_query(sql_result.sql)
+            logger.info(f"Query executed successfully, {len(results)} results returned")
+        except Exception as e:
+            logger.error(f"SQL execution failed: {str(e)}, SQL: {sql_result.sql}")
+            # Return empty result with error information
+            return QueryExecutionResult(
+                query_id=query_id,
+                original_query=natural_language_query,
+                sql_executed=sql_result.sql,
+                results=[],
+                result_count=0,
+                execution_time_ms=(time.time() - start_time) * 1000,
+                answer=f"Unable to execute query: {str(e)}",
+                source_documents=[],
+                confidence=0.0
+            )
         
         # Step 5: Get source documents for provenance
         source_docs = self._get_source_documents(results)
@@ -332,6 +348,11 @@ class QueryEngine:
         source_ids = set()
         
         for row in query_results:
+            # Ensure row is a dict before accessing
+            if not isinstance(row, dict):
+                logger.warning(f"Unexpected row type in query results: {type(row)}, value: {row}")
+                continue
+            
             # Look for common provenance columns
             if "source_chunk_id" in row:
                 source_ids.add(row["source_chunk_id"])
