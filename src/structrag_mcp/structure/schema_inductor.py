@@ -26,8 +26,9 @@ logger = logging.getLogger(__name__)
 
 
 def _strip_markdown_json(content: str) -> str:
-    """Strip markdown code blocks from LLM response (for Groq compatibility)"""
+    """Strip markdown code blocks and extra text from LLM response"""
     content = content.strip()
+    
     # Remove markdown code block markers
     if content.startswith('```json'):
         content = content[7:]
@@ -35,6 +36,26 @@ def _strip_markdown_json(content: str) -> str:
         content = content[3:]
     if content.endswith('```'):
         content = content[:-3]
+    
+    content = content.strip()
+    
+    # Try to extract JSON if there's extra text
+    # Look for the first { and last }
+    start = content.find('{')
+    end = content.rfind('}')
+    
+    if start != -1 and end != -1 and start < end:
+        content = content[start:end+1]
+    
+    # Also check for array format
+    if content.find('[') != -1 and content.rfind(']') != -1:
+        arr_start = content.find('[')
+        arr_end = content.rfind(']')
+        if arr_start < arr_end:
+            # If array comes before object, prefer object
+            if start == -1 or arr_start < start:
+                content = content[arr_start:arr_end+1]
+    
     return content.strip()
 
 
@@ -100,11 +121,13 @@ class SchemaInductor:
         
         # Parse and validate response
         try:
-            # Strip markdown code blocks (Groq wraps JSON in ```json...```)
+            # Strip markdown code blocks and extract JSON
             clean_content = _strip_markdown_json(response.content)
             schema_data = json.loads(clean_content)
         except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse LLM response: {response.content}")
+            logger.error(f"Failed to parse LLM response. Error: {str(e)}")
+            logger.error(f"Response content (first 500 chars): {response.content[:500]}")
+            logger.error(f"Cleaned content (first 500 chars): {clean_content[:500] if 'clean_content' in locals() else 'N/A'}")
             raise ValueError(f"Invalid JSON response from LLM: {str(e)}")
         
         # Convert to Pydantic models

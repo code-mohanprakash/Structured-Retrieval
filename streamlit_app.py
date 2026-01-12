@@ -45,11 +45,11 @@ with st.sidebar:
     st.header("⚙️ Configuration")
     
     # Check for API key
-    api_key = os.getenv("GROQ_API_KEY")
+    api_key = os.getenv("GOOGLE_API_KEY")
     if api_key:
-        st.success("✅ Groq API Key configured")
+        st.success("✅ Google Gemini API Key configured")
     else:
-        st.error("❌ GROQ_API_KEY not found in .env")
+        st.error("❌ GOOGLE_API_KEY not found in .env")
         st.stop()
     
     st.markdown("---")
