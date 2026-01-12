@@ -126,8 +126,10 @@ with tab1:
                         tmp_file.write(uploaded_file.read())
                         pdf_path = tmp_file.name
                     
-                    # Create database
-                    db_path = f"streamlit_db_{uploaded_file.name.replace('.pdf', '').replace(' ', '_')}.db"
+                    # Create database with timestamp to avoid conflicts
+                    import time
+                    db_name = uploaded_file.name.replace('.pdf', '').replace(' ', '_')
+                    db_path = f"streamlit_db_{db_name}_{int(time.time())}.db"
                     st.session_state.db_path = db_path
                     
                     # Initialize database
@@ -194,11 +196,11 @@ with tab1:
                     status_text.text("⚡ Extracting entities (populating tables)...")
                     progress_bar.progress(75)
                     
-                    extractor = EntityExtractor(db)
+                    extractor = EntityExtractor(db, provenance)
                     total_entities = 0
                     for schema in schemas:
-                        extraction_result = extractor.extract_entities(schema)
-                        total_entities += extraction_result.get('entity_count', 0)
+                        extraction_result = extractor.extract_entities(schema, document_id=doc_id)
+                        total_entities += extraction_result.total_entities_found
                     
                     progress_bar.progress(100)
                     status_text.text("✅ Processing complete!")

@@ -182,20 +182,39 @@ class SchemaInductor:
         for entity in result.entities:
             schema_json = entity.model_dump_json()
             
-            insert_query = """
-            INSERT INTO schema_registry (table_name, entity_type, schema_json, created_at, confidence)
-            VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?)
-            """
-            
             # Use entity name as table name (will be used for actual table creation)
             table_name = entity.name.lower()
             
-            self.db.execute_query(
-                insert_query,
-                params=[table_name, entity.name, schema_json, result.metadata.get("confidence", 0.9)]
-            )
+            # Check if schema already exists, if so update it
+            check_query = "SELECT COUNT(*) FROM schema_registry WHERE table_name = ?"
+            existing = self.db.execute_query(check_query, params=[table_name])
+            
+            if existing and len(existing) > 0 and existing[0][0] > 0:
+                # Update existing schema
+                update_query = """
+                UPDATE schema_registry 
+                SET entity_type = ?, schema_json = ?, confidence = ?
+                WHERE table_name = ?
+                """
+                self.db.execute_query(
+                    update_query,
+                    params=[entity.name, schema_json, result.metadata.get("confidence", 0.9), table_name]
+                )
+                logger.info(f"Updated schema for {table_name}")
+            else:
+                # Insert new schema
+                insert_query = """
+                INSERT INTO schema_registry (table_name, entity_type, schema_json, created_at, confidence)
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?)
+                """
+                self.db.execute_query(
+                    insert_query,
+                    params=[table_name, entity.name, schema_json, result.metadata.get("confidence", 0.9)]
+                )
+                logger.info(f"Inserted new schema for {table_name}")
         
         logger.info(f"Stored {len(result.entities)} schemas in registry")
+    
     
     def create_tables_from_schema(self, result: SchemaInductionResult):
         """

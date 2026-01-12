@@ -94,6 +94,10 @@ class EntityExtractor:
             logger.error(f"Failed to parse LLM response: {response.content}")
             raise ValueError(f"Invalid JSON response: {str(e)}")
         
+        # Normalize Groq responses that may return a top-level list
+        if isinstance(extraction_data, list):
+            extraction_data = {"entities": extraction_data}
+        
         # Convert to EntityInstance objects
         entities = []
         for entity_data in extraction_data.get("entities", []):
