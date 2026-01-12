@@ -294,7 +294,8 @@ with tab2:
             try:
                 with st.spinner("🤔 Thinking..."):
                     db = DuckDBManager(st.session_state.db_path)
-                    engine = QueryEngine(db)
+                    provenance = ProvenanceTracker(db)
+                    engine = QueryEngine(db, provenance)
                     result = engine.query(query)
                 
                 # Format response
