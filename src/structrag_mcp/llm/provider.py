@@ -2,8 +2,10 @@
 LLM Provider Abstraction Layer
 
 Supports multiple LLM providers with unified interface:
-- OpenAI (GPT-4o, GPT-4o-mini) - primary
-- Anthropic (Claude 3.5 Sonnet) - fallback
+- Groq (Llama 3.3, Mixtral) - primary
+- Google (Gemini) - fallback
+- OpenAI (GPT-4o, GPT-4o-mini) - optional
+- Anthropic (Claude 3.5 Sonnet) - optional
 - Ollama (local models) - optional
 
 Features:
@@ -27,6 +29,14 @@ from anthropic import Anthropic, AnthropicError
 
 logger = logging.getLogger(__name__)
 
+# Try to import Google AI, graceful fallback if not installed
+try:
+    import google.generativeai as genai
+    GOOGLE_AVAILABLE = True
+except ImportError:
+    GOOGLE_AVAILABLE = False
+    logger.warning("google-generativeai not installed. Google/Gemini support disabled.")
+
 
 class LLMProvider(Enum):
     """Supported LLM providers"""
@@ -34,6 +44,7 @@ class LLMProvider(Enum):
     ANTHROPIC = "anthropic"
     OLLAMA = "ollama"
     GROQ = "groq"
+    GOOGLE = "google"
 
 
 @dataclass
@@ -126,6 +137,16 @@ class LLMProviderWrapper:
                 timeout=self.config.timeout
             )
         
+        elif self.config.provider == LLMProvider.GOOGLE:
+            if not GOOGLE_AVAILABLE:
+                raise ValueError("google-generativeai package not installed. Run: pip install google-generativeai")
+            if not self.config.api_key:
+                self.config.api_key = os.getenv("GOOGLE_API_KEY")
+            if not self.config.api_key:
+                raise ValueError("GOOGLE_API_KEY not found in config or environment")
+            genai.configure(api_key=self.config.api_key)
+            self.client = genai.GenerativeModel(self.config.model)
+        
         elif self.config.provider == LLMProvider.OLLAMA:
             # Ollama uses OpenAI-compatible API
             base_url = self.config.base_url or "http://localhost:11434/v1"
@@ -177,6 +198,10 @@ class LLMProviderWrapper:
                 elif self.config.provider == LLMProvider.ANTHROPIC:
                     response = self._complete_anthropic(
                         system_prompt, user_prompt, temp, max_tok
+                    )
+                elif self.config.provider == LLMProvider.GOOGLE:
+                    response = self._complete_google(
+                        system_prompt, user_prompt, json_mode, temp, max_tok
                     )
                 else:
                     raise ValueError(f"Unsupported provider: {self.config.provider}")
@@ -261,6 +286,45 @@ class LLMProviderWrapper:
             latency_ms=0  # Set by caller
         )
     
+    def _complete_google(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        json_mode: bool,
+        temperature: float,
+        max_tokens: int
+    ) -> LLMResponse:
+        """Complete using Google Gemini API"""
+        # Combine system and user prompts
+        full_prompt = f"{system_prompt}\n\n{user_prompt}"
+        
+        if json_mode:
+            full_prompt += "\n\nRespond with valid JSON only."
+        
+        generation_config = {
+            "temperature": temperature,
+            "max_output_tokens": max_tokens,
+        }
+        
+        response = self.client.generate_content(
+            full_prompt,
+            generation_config=generation_config
+        )
+        
+        # Extract token counts (Google provides these differently)
+        prompt_tokens = response.usage_metadata.prompt_token_count if hasattr(response, 'usage_metadata') else 0
+        completion_tokens = response.usage_metadata.candidates_token_count if hasattr(response, 'usage_metadata') else 0
+        
+        return LLMResponse(
+            content=response.text,
+            model=self.config.model,
+            provider=LLMProvider.GOOGLE,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+            latency_ms=0  # Set by caller
+        )
+    
     def _complete_anthropic(
         self,
         system_prompt: str,
@@ -325,6 +389,7 @@ class LLMProviderWrapper:
 _openai_provider: Optional[LLMProviderWrapper] = None
 _anthropic_provider: Optional[LLMProviderWrapper] = None
 _groq_provider: Optional[LLMProviderWrapper] = None
+_google_provider: Optional[LLMProviderWrapper] = None
 
 
 def get_groq_provider() -> LLMProviderWrapper:
@@ -339,6 +404,20 @@ def get_groq_provider() -> LLMProviderWrapper:
         )
         _groq_provider = LLMProviderWrapper(config)
     return _groq_provider
+
+
+def get_google_provider() -> LLMProviderWrapper:
+    """Get or create Google Gemini provider instance"""
+    global _google_provider
+    if _google_provider is None:
+        config = LLMConfig(
+            provider=LLMProvider.GOOGLE,
+            model=os.getenv("GOOGLE_MODEL", "gemini-1.5-flash"),
+            temperature=0.1,
+            max_tokens=4096
+        )
+        _google_provider = LLMProviderWrapper(config)
+    return _google_provider
 
 
 def get_openai_provider() -> LLMProviderWrapper:
@@ -392,13 +471,15 @@ def complete_with_fallback(
     available_providers = []
     if os.getenv("GROQ_API_KEY"):
         available_providers.append(("groq", get_groq_provider))
+    if os.getenv("GOOGLE_API_KEY"):
+        available_providers.append(("google", get_google_provider))
     if os.getenv("OPENAI_API_KEY"):
         available_providers.append(("openai", get_openai_provider))
     if os.getenv("ANTHROPIC_API_KEY"):
         available_providers.append(("anthropic", get_anthropic_provider))
     
     if not available_providers:
-        error_msg = "No LLM API keys configured. Please set GROQ_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY"
+        error_msg = "No LLM API keys configured. Please set GROQ_API_KEY, GOOGLE_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY"
         logger.error(error_msg)
         return LLMResponse(
             content="",
