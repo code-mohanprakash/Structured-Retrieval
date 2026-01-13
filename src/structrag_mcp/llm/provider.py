@@ -298,13 +298,14 @@ class LLMProviderWrapper:
         # Combine system and user prompts
         full_prompt = f"{system_prompt}\n\n{user_prompt}"
         
-        if json_mode:
-            full_prompt += "\n\nRespond with valid JSON only."
-        
         generation_config = {
             "temperature": temperature,
             "max_output_tokens": max_tokens,
         }
+        
+        if json_mode:
+            full_prompt += "\n\nRespond with valid JSON only."
+            generation_config["response_mime_type"] = "application/json"
         
         response = self.client.generate_content(
             full_prompt,
@@ -451,7 +452,9 @@ def get_anthropic_provider() -> LLMProviderWrapper:
 def complete_with_fallback(
     system_prompt: str,
     user_prompt: str,
-    json_mode: bool = False
+    json_mode: bool = False,
+    temperature: float = 0.1,
+    max_tokens: int = 2000
 ) -> LLMResponse:
     """
     Complete using Google Gemini (single provider)
@@ -460,6 +463,8 @@ def complete_with_fallback(
         system_prompt: System instruction
         user_prompt: User query
         json_mode: Force JSON output
+        temperature: Sampling temperature
+        max_tokens: Maximum tokens to generate
     
     Returns:
         LLMResponse from Google provider
@@ -485,7 +490,13 @@ def complete_with_fallback(
     # Use Google provider
     try:
         provider = get_google_provider()
-        response = provider.complete(system_prompt, user_prompt, json_mode)
+        response = provider.complete(
+            system_prompt, 
+            user_prompt, 
+            json_mode,
+            temperature=temperature,
+            max_tokens=max_tokens
+        )
         if not response.error:
             logger.info(f"Successfully used Google Gemini")
             return response

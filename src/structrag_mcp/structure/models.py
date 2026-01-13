@@ -15,7 +15,11 @@ from pydantic import BaseModel, Field, field_validator
 
 
 class FieldDefinition(BaseModel):
-    """Definition of a single field/attribute in an entity schema"""
+    """Definition of a single field/attribute in an entity schema
+    
+    Per S-RAG paper Section 3.2.1: Each attribute should include name, type,
+    description, and example values to guide LLM lexicalization.
+    """
     name: str = Field(..., description="Field name (snake_case)")
     type: Literal["TEXT", "INTEGER", "REAL", "DATE", "BOOLEAN", "JSON"] = Field(
         ..., description="DuckDB data type"
@@ -26,6 +30,10 @@ class FieldDefinition(BaseModel):
     is_primary_key: bool = Field(default=False, description="Whether this is the primary key")
     is_nullable: bool = Field(default=True, description="Whether this field can be null")
     description: Optional[str] = Field(None, description="Human-readable field description")
+    examples: List[str] = Field(
+        default_factory=list, 
+        description="Example values for cross-document standardization (S-RAG paper Section 3.2.1)"
+    )
     
     @field_validator("name")
     @classmethod

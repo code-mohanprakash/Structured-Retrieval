@@ -1,6 +1,12 @@
 """
 DuckDB Storage Manager for StructRAG MCP
-Handles all database operations including schema creation and querying
+
+Handles all database operations including schema creation and querying.
+
+Implements S-RAG paper Section 3.2.2 and Appendix D:
+- Post-prediction processing to compute attribute-level statistics
+- Statistics for numeric: mean, max, min, non-null count
+- Statistics for string/boolean: unique values, most common values
 """
 from typing import Dict, List, Optional, Any
 from pathlib import Path
@@ -258,6 +264,238 @@ class DuckDBManager:
         result = self.conn.execute("SELECT COUNT(*) FROM chunks").fetchone()
         return result[0] if result else 0
     
+    # ========================================================================
+    # COLUMN STATISTICS (S-RAG Paper Section 3.2.2 and Appendix D)
+    # ========================================================================
+    
+    def compute_column_statistics(self, table_name: str) -> Dict[str, Dict[str, Any]]:
+        """
+        Compute attribute-level statistics for a table.
+        
+        Per S-RAG paper Appendix D: "After applying record prediction to all 
+        documents in the corpus, we compute attribute-level statistics. For 
+        numeric attributes, we calculate the mean, maximum, and minimum values; 
+        for string and boolean attributes, we include the set of unique values 
+        predicted by the LLM. For all attributes, regardless of type, we also 
+        include the number of non-zero and non-null values."
+        
+        These statistics are used at inference time to guide text-to-SQL.
+        
+        Args:
+            table_name: Name of the table to analyze
+        
+        Returns:
+            Dict mapping column names to their statistics
+        """
+        statistics = {}
+        
+        # Get column info
+        schema = self.get_table_schema(table_name)
+        
+        for col_name, col_type in schema.items():
+            col_stats = self._compute_single_column_stats(table_name, col_name, col_type)
+            statistics[col_name] = col_stats
+        
+        logger.info(f"Computed statistics for {len(statistics)} columns in {table_name}")
+        return statistics
+    
+    def _compute_single_column_stats(
+        self, 
+        table_name: str, 
+        col_name: str, 
+        col_type: str
+    ) -> Dict[str, Any]:
+        """Compute statistics for a single column"""
+        stats = {
+            "column_name": col_name,
+            "column_type": col_type
+        }
+        
+        try:
+            # Non-null count (for all types)
+            result = self.conn.execute(f"""
+                SELECT 
+                    COUNT(*) as total_count,
+                    COUNT({col_name}) as non_null_count
+                FROM {table_name}
+            """).fetchone()
+            
+            stats["total_count"] = result[0]
+            stats["non_null_count"] = result[1]
+            stats["null_count"] = result[0] - result[1]
+            
+            # Type-specific statistics
+            col_type_upper = col_type.upper()
+            
+            if any(t in col_type_upper for t in ['INT', 'REAL', 'FLOAT', 'DOUBLE', 'DECIMAL', 'NUMERIC']):
+                # Numeric column statistics
+                numeric_stats = self._compute_numeric_stats(table_name, col_name)
+                stats.update(numeric_stats)
+                
+            elif 'BOOL' in col_type_upper:
+                # Boolean column statistics
+                bool_stats = self._compute_boolean_stats(table_name, col_name)
+                stats.update(bool_stats)
+                
+            else:
+                # String/text column statistics
+                string_stats = self._compute_string_stats(table_name, col_name)
+                stats.update(string_stats)
+                
+        except Exception as e:
+            logger.warning(f"Error computing stats for {col_name}: {e}")
+            stats["error"] = str(e)
+        
+        return stats
+    
+    def _compute_numeric_stats(self, table_name: str, col_name: str) -> Dict[str, Any]:
+        """Compute statistics for numeric columns"""
+        result = self.conn.execute(f"""
+            SELECT 
+                AVG({col_name}) as mean_value,
+                MAX({col_name}) as max_value,
+                MIN({col_name}) as min_value,
+                COUNT(CASE WHEN {col_name} != 0 THEN 1 END) as non_zero_count
+            FROM {table_name}
+            WHERE {col_name} IS NOT NULL
+        """).fetchone()
+        
+        return {
+            "mean": result[0],
+            "max": result[1],
+            "min": result[2],
+            "non_zero_count": result[3]
+        }
+    
+    def _compute_boolean_stats(self, table_name: str, col_name: str) -> Dict[str, Any]:
+        """Compute statistics for boolean columns"""
+        result = self.conn.execute(f"""
+            SELECT 
+                {col_name},
+                COUNT(*) as count
+            FROM {table_name}
+            WHERE {col_name} IS NOT NULL
+            GROUP BY {col_name}
+        """).fetchall()
+        
+        value_counts = {str(row[0]): row[1] for row in result}
+        
+        return {
+            "unique_values": list(value_counts.keys()),
+            "value_counts": value_counts,
+            "true_count": value_counts.get("true", value_counts.get("True", 0)),
+            "false_count": value_counts.get("false", value_counts.get("False", 0))
+        }
+    
+    def _compute_string_stats(self, table_name: str, col_name: str, max_unique: int = 50) -> Dict[str, Any]:
+        """
+        Compute statistics for string/text columns
+        
+        Args:
+            table_name: Table name
+            col_name: Column name
+            max_unique: Maximum unique values to return (prevent memory issues)
+        """
+        # Get unique values count
+        unique_count_result = self.conn.execute(f"""
+            SELECT COUNT(DISTINCT {col_name}) as unique_count
+            FROM {table_name}
+            WHERE {col_name} IS NOT NULL
+        """).fetchone()
+        
+        unique_count = unique_count_result[0]
+        
+        # Get most common values
+        common_values_result = self.conn.execute(f"""
+            SELECT {col_name}, COUNT(*) as count
+            FROM {table_name}
+            WHERE {col_name} IS NOT NULL
+            GROUP BY {col_name}
+            ORDER BY count DESC
+            LIMIT {max_unique}
+        """).fetchall()
+        
+        unique_values = [row[0] for row in common_values_result]
+        value_counts = {row[0]: row[1] for row in common_values_result}
+        
+        return {
+            "unique_count": unique_count,
+            "unique_values": unique_values[:max_unique],
+            "value_counts": value_counts,
+            "most_common": unique_values[0] if unique_values else None
+        }
+    
+    def get_all_table_statistics(self) -> Dict[str, Dict[str, Dict[str, Any]]]:
+        """
+        Compute statistics for all entity tables in the database.
+        
+        Returns:
+            Dict mapping table names to their column statistics
+        """
+        all_stats = {}
+        
+        # Get entity tables from schema registry
+        try:
+            result = self.conn.execute("""
+                SELECT table_name FROM schema_registry
+            """).fetchall()
+            
+            entity_tables = [row[0] for row in result]
+        except:
+            # Fallback: get all non-system tables
+            entity_tables = self.list_tables()
+            entity_tables = [t for t in entity_tables if t not in 
+                           ['documents', 'chunks', 'query_provenance', 'schema_registry']]
+        
+        for table_name in entity_tables:
+            try:
+                all_stats[table_name] = self.compute_column_statistics(table_name)
+            except Exception as e:
+                logger.warning(f"Error computing statistics for {table_name}: {e}")
+        
+        return all_stats
+    
+    def format_statistics_for_prompt(self, table_name: str) -> str:
+        """
+        Format column statistics as text for inclusion in LLM prompts.
+        
+        Per S-RAG paper Section 3.3: "These statistics guide the LLM in 
+        mapping the semantic meaning of q to the appropriate lexical 
+        filters or values in the formal query."
+        
+        Args:
+            table_name: Table name
+        
+        Returns:
+            Formatted string describing column statistics
+        """
+        stats = self.compute_column_statistics(table_name)
+        
+        lines = [f"Column Statistics for table '{table_name}':", ""]
+        
+        for col_name, col_stats in stats.items():
+            col_type = col_stats.get("column_type", "unknown")
+            non_null = col_stats.get("non_null_count", 0)
+            total = col_stats.get("total_count", 0)
+            
+            line = f"- {col_name} ({col_type}): {non_null}/{total} non-null values"
+            
+            # Add type-specific info
+            if "mean" in col_stats:
+                mean = col_stats["mean"]
+                min_val = col_stats["min"]
+                max_val = col_stats["max"]
+                if mean is not None:
+                    line += f", range [{min_val} - {max_val}], mean {mean:.2f}"
+            elif "unique_values" in col_stats:
+                unique_vals = col_stats["unique_values"][:10]  # Limit for prompt
+                if unique_vals:
+                    line += f", values: {unique_vals}"
+            
+            lines.append(line)
+        
+        return "\n".join(lines)
+
     def close(self):
         """Close database connection"""
         if self.conn:
