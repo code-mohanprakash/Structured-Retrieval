@@ -187,6 +187,9 @@ def ingest_corpus(input_path: str) -> str:
                 }])
                 total_tokens += chunk["token_count"]
             
+            # Update document chunk count now that chunks are known
+            db.update_document_chunk_count(doc_id, len(chunks))
+            
             total_chunks += len(chunks)
             files_processed += 1
             parsers_used[parser_name] = parsers_used.get(parser_name, 0) + 1

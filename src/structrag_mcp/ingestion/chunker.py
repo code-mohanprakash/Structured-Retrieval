@@ -170,5 +170,7 @@ class SemanticChunker:
         
         return {
             "text": text,
+            "chunk_index": chunk_idx,
+            "token_count": len(tokens),
             "metadata": chunk_meta
         }

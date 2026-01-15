@@ -185,11 +185,12 @@ class SQLQueryResult(BaseModel):
     @classmethod
     def validate_sql_safety(cls, v: str) -> str:
         """Basic SQL safety check"""
+        import re
         dangerous_keywords = ["DROP", "DELETE", "INSERT", "UPDATE", "ALTER", "TRUNCATE", "CREATE"]
         v_upper = v.upper()
-        for keyword in dangerous_keywords:
-            if keyword in v_upper:
-                raise ValueError(f"SQL contains dangerous keyword: {keyword}")
+        pattern = r"\b(" + "|".join(dangerous_keywords) + r")\b"
+        if re.search(pattern, v_upper):
+            raise ValueError("SQL contains dangerous keyword")
         return v
 
 

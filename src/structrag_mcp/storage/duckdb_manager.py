@@ -249,10 +249,21 @@ class DuckDBManager:
     def list_tables(self) -> List[str]:
         """List all tables in database"""
         result = self.conn.execute("""
-            SELECT name FROM sqlite_master 
-            WHERE type='table' AND name NOT LIKE 'sqlite_%'
+            SELECT table_name
+            FROM information_schema.tables
+            WHERE table_schema = 'main'
+              AND table_type = 'BASE TABLE'
         """).fetchall()
         return [row[0] for row in result]
+
+    def update_document_chunk_count(self, doc_id: str, chunk_count: int) -> None:
+        """Update chunk count for a document"""
+        self.conn.execute("""
+            UPDATE documents
+            SET chunk_count = ?
+            WHERE doc_id = ?
+        """, [chunk_count, doc_id])
+        self.conn.commit()
     
     def get_document_count(self) -> int:
         """Get total document count"""

@@ -15,8 +15,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 # Only if structrag_mcp imports work, otherwise show corpus structure
 try:
-    from structrag_mcp.database.ingestion import CorpusIngester
-    from structrag_mcp.schema.inductor import SchemaInductor
+    from structrag_mcp.storage import DuckDBManager
+    from structrag_mcp.structure import SchemaInductor
     STRUCTRAG_AVAILABLE = True
 except ImportError as e:
     print(f"⚠ structrag_mcp import issue: {e}")
@@ -29,8 +29,25 @@ print()
 
 # Load the actual S-RAG paper datasets
 print("[1/4] Loading HOTELS dataset from S-RAG paper...")
-corpus_ds = load_dataset("ai21labs/aggregative_questions", "corpus")["train"]
-questions_ds = load_dataset("ai21labs/aggregative_questions", "questions")["train"]
+try:
+    base_url = (
+        "https://huggingface.co/datasets/ai21labs/aggregative_questions"
+        "/resolve/main/datasets/AI21-Hotels_train"
+    )
+    corpus_ds = load_dataset(
+        "json",
+        data_files=f"{base_url}/corpus.jsonl",
+        split="train"
+    )
+    questions_ds = load_dataset(
+        "json",
+        data_files=f"{base_url}/questions.jsonl",
+        split="train"
+    )
+except Exception as e:
+    print(f"✗ Failed to load dataset: {e}")
+    print("  If you're offline or in a restricted network, enable access or use a cached dataset.")
+    sys.exit(1)
 
 print(f"✓ Corpus: {len(corpus_ds)} hotel pages")
 print(f"✓ Questions: {len(questions_ds)} aggregative questions")

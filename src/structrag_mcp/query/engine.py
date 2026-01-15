@@ -135,12 +135,16 @@ class QueryEngine:
         
         execution_time_ms = (time.time() - start_time) * 1000
         
-        # Step 7: Log query for audit
+        # Step 7: Log query for audit (store doc IDs for provenance)
+        source_doc_ids = [doc.get("doc_id") for doc in source_docs if doc.get("doc_id")]
         self.db.log_query(
             query_id=query_id,
-            query_text=natural_language_query,
-            query_type=query_metadata.query_type,
-            result_count=len(results)
+            question=natural_language_query,
+            sql=sql_result.sql,
+            result=results,
+            source_docs=source_doc_ids,
+            execution_time_ms=execution_time_ms,
+            error=None
         )
         
         result = QueryExecutionResult(
@@ -299,20 +303,20 @@ class QueryEngine:
         """
         sql_upper = sql.upper().strip()
         
-        # Dangerous keywords that modify data
+        # Dangerous keywords that modify data (match whole words)
+        import re
         dangerous_keywords = [
             "DROP", "DELETE", "INSERT", "UPDATE", "ALTER",
             "TRUNCATE", "CREATE", "GRANT", "REVOKE"
         ]
+        pattern = r"\b(" + "|".join(dangerous_keywords) + r")\b"
+        if re.search(pattern, sql_upper):
+            logger.error("Unsafe SQL detected: contains data-modifying keyword")
+            return False
         
-        for keyword in dangerous_keywords:
-            if keyword in sql_upper:
-                logger.error(f"Unsafe SQL detected: contains '{keyword}'")
-                return False
-        
-        # Must start with SELECT
-        if not sql_upper.startswith("SELECT"):
-            logger.error(f"SQL must start with SELECT, got: {sql_upper[:20]}")
+        # Must start with SELECT or WITH (CTE)
+        if not (sql_upper.startswith("SELECT") or sql_upper.startswith("WITH")):
+            logger.error(f"SQL must start with SELECT/WITH, got: {sql_upper[:20]}")
             return False
         
         return True
@@ -393,7 +397,7 @@ class QueryEngine:
         # Query documents table for source info
         placeholders = ", ".join(["?"] * len(source_ids))
         query = f"""
-        SELECT DISTINCT d.doc_id, d.filename, d.file_type
+        SELECT DISTINCT d.doc_id, d.filename, d.source_type
         FROM documents d
         JOIN chunks c ON d.doc_id = c.doc_id
         WHERE c.chunk_id IN ({placeholders})
@@ -406,7 +410,7 @@ class QueryEngine:
                 {
                     "doc_id": doc["doc_id"],
                     "filename": doc["filename"],
-                    "file_type": doc.get("file_type", "unknown")
+                    "file_type": doc.get("source_type", "unknown")
                 }
                 for doc in docs
             ]
